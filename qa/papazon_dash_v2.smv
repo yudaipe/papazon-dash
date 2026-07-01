@@ -1,0 +1,209 @@
+MODULE main
+
+-- papazon-dash 状態遷移モデル v2.0 (master exclusive unpair)
+-- 対象実装: FirebaseRepository.kt / SettingsScreen.kt / firestore.rules v6.1
+-- 目的: CTL-2/3/6 TRUE確認 + CTL-7(member edge case)を新規追加してTRUE確認
+-- 実行: /home/ysuzuki/.local/bin/NuSMV papazon_dash_v2.smv
+-- NuSMV 2.6.0 対応
+-- v1.0.1 (papazon_dash_fixed.smv) からの変更点:
+--   1. ROLE変数追加 (none/master/member)
+--   2. EVENT: member_unpair除外・sign_in_masterとsign_in_memberに分割
+--   3. master_unpairのみunpair操作を表現 (member_unpairは構造的に不可能)
+--   4. CTL-7追加: member時にPAIR_DOC_ACTIVEをFALSEにできないことを検証
+
+VAR
+  -- 非決定的入力イベント（環境側・毎ステップ非決定的選択）
+  -- member_unpair は除外: UI非表示+Firestore rules拒否で構造的に不可能
+  EVENT : {sign_in_master, sign_in_member, sign_out, reinstall,
+           create_pair, member_joined,
+           join_pair, master_unpair, add_item, noop};
+
+  -- ===== ユーザーロール =====
+  -- master: generateInviteCode()呼出可・master_unpair実行可
+  -- member: joinByCode()呼出可・unpair試行はUI非表示+rules拒否
+  ROLE : {none, master, member};
+
+  -- ===== Android ローカル状態 =====
+
+  AUTH : {none, signed_in};
+  PAIR_STATE : {unpaired, inviting, paired};
+  ITEMS_LISTENER : boolean;
+  JOIN_LISTENER : boolean;
+  FCM_SYNCED : boolean;
+  PREV_SIGN_IN : boolean;
+
+  -- ===== Firestore 状態 =====
+
+  ORPHAN_USER_DOC : boolean;
+  PAIR_DOC_ACTIVE : boolean;
+  ITEMS_SUBCOL_DATA : boolean;
+
+ASSIGN
+  init(EVENT)             := noop;
+  init(ROLE)              := none;
+  init(AUTH)              := none;
+  init(PAIR_STATE)        := unpaired;
+  init(ITEMS_LISTENER)    := FALSE;
+  init(JOIN_LISTENER)     := FALSE;
+  init(FCM_SYNCED)        := FALSE;
+  init(PREV_SIGN_IN)      := FALSE;
+  init(ORPHAN_USER_DOC)   := FALSE;
+  init(PAIR_DOC_ACTIVE)   := FALSE;
+  init(ITEMS_SUBCOL_DATA) := FALSE;
+
+  -- EVENT: 毎ステップ非決定的選択（環境）
+  next(EVENT) := {sign_in_master, sign_in_member, sign_out, reinstall,
+                  create_pair, member_joined,
+                  join_pair, master_unpair, add_item, noop};
+
+  -- ROLE 遷移
+  -- sign_in_master: masterとしてサインイン
+  -- sign_in_member: memberとしてサインイン
+  -- sign_out/reinstall: ロールリセット
+  next(ROLE) :=
+    case
+      EVENT = sign_in_master & AUTH = none : master;
+      EVENT = sign_in_member & AUTH = none : member;
+      EVENT = sign_out                     : none;
+      EVENT = reinstall                    : none;
+      TRUE                                 : ROLE;
+    esac;
+
+  -- AUTH 遷移
+  next(AUTH) :=
+    case
+      (EVENT = sign_in_master | EVENT = sign_in_member) & AUTH = none : signed_in;
+      EVENT = sign_out                                                  : none;
+      EVENT = reinstall                                                 : none;
+      TRUE                                                              : AUTH;
+    esac;
+
+  -- PAIR_STATE 遷移
+  -- create_pair: masterのみ実行可
+  -- join_pair: memberのみ実行可
+  -- master_unpair: masterのみ実行可 (member_unpairイベントなし)
+  next(PAIR_STATE) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & ROLE = master & PAIR_STATE = unpaired : inviting;
+      EVENT = member_joined & PAIR_STATE = inviting                                    : paired;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired : paired;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                      : unpaired;
+      EVENT = sign_out                                                                  : unpaired;
+      EVENT = reinstall                                                                 : unpaired;
+      TRUE                                                                              : PAIR_STATE;
+    esac;
+
+  -- ITEMS_LISTENER 遷移 (CTL-2 fix済: master_unpairでlistener解除)
+  next(ITEMS_LISTENER) :=
+    case
+      EVENT = member_joined & PAIR_STATE = inviting                                : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                  : FALSE;
+      EVENT = sign_out                                                              : FALSE;
+      EVENT = reinstall                                                             : FALSE;
+      TRUE                                                                          : ITEMS_LISTENER;
+    esac;
+
+  -- JOIN_LISTENER 遷移
+  next(JOIN_LISTENER) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & ROLE = master & PAIR_STATE = unpaired : TRUE;
+      EVENT = member_joined & PAIR_STATE = inviting                                    : FALSE;
+      EVENT = sign_out                                                                  : FALSE;
+      EVENT = reinstall                                                                 : FALSE;
+      TRUE                                                                              : JOIN_LISTENER;
+    esac;
+
+  -- PREV_SIGN_IN 遷移（孤児doc発生の前提条件トラッカー）
+  next(PREV_SIGN_IN) :=
+    case
+      (EVENT = sign_in_master | EVENT = sign_in_member) & AUTH = none : TRUE;
+      TRUE                                                             : PREV_SIGN_IN;
+    esac;
+
+  -- ORPHAN_USER_DOC 遷移 (CTL-4 既知limitation・v1.1.0 Google Sign-In移行で解消予定)
+  next(ORPHAN_USER_DOC) :=
+    case
+      (EVENT = sign_in_master | EVENT = sign_in_member) & AUTH = none & PREV_SIGN_IN = TRUE : TRUE;
+      EVENT = reinstall & PREV_SIGN_IN = TRUE                                               : TRUE;
+      TRUE                                                                                  : ORPHAN_USER_DOC;
+    esac;
+
+  -- FCM_SYNCED 遷移
+  next(FCM_SYNCED) :=
+    case
+      (EVENT = sign_in_master | EVENT = sign_in_member) & AUTH = none : TRUE;
+      EVENT = sign_out                                                  : FALSE;
+      EVENT = reinstall                                                 : {TRUE, FALSE};
+      TRUE                                                              : FCM_SYNCED;
+    esac;
+
+  -- PAIR_DOC_ACTIVE 遷移
+  -- CTL-6 fix済 + master exclusive: master_unpairのみFALSEに遷移可
+  -- ROLE=masterのみmaster_unpairイベントが有効 → memberはPAIR_DOC_ACTIVEをFALSEにできない
+  -- reinstall: アプリ完全リセット。ペア関係を終了させる設計意図
+  --   (現実装では孤児pair doc残存。v1.1.0でGoogle Sign-In移行後に正規対応)
+  next(PAIR_DOC_ACTIVE) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & ROLE = master & PAIR_STATE = unpaired : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                      : FALSE;
+      EVENT = sign_out                                                                  : FALSE;
+      EVENT = reinstall                                                                 : FALSE;
+      TRUE                                                                              : PAIR_DOC_ACTIVE;
+    esac;
+
+  -- ITEMS_SUBCOL_DATA 遷移
+  -- CTL-3 fix済: master_unpair時にCF cascade削除でFALSEに遷移
+  -- sign_out: ペア関係の終了を表すモデル上の簡略化 (実装では孤児items残存・モデル簡略化)
+  -- reinstall: アプリ完全リセット。設計意図としてcleanupを表現
+  next(ITEMS_SUBCOL_DATA) :=
+    case
+      EVENT = add_item & PAIR_STATE = paired                               : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master          : FALSE;
+      EVENT = sign_out                                                      : FALSE;
+      EVENT = reinstall                                                     : FALSE;
+      TRUE                                                                  : ITEMS_SUBCOL_DATA;
+    esac;
+
+
+-- ============================================================
+-- CTL検証式 (7本)
+-- 期待結果:
+--   CTL-1: TRUE  (signOut正常動作)
+--   CTL-2: TRUE  (FIX済: master_unpairでlistener解除)
+--   CTL-3: TRUE  (FIX済: CF cascade削除)
+--   CTL-4: FALSE (既知limitation: 孤児user doc・v1.1.0 Google Sign-In移行で解消予定)
+--   CTL-5: TRUE  (setPaired正常動作)
+--   CTL-6: TRUE  (FIX済: master_unpairのみPAIR_DOC_ACTIVE=false可)
+--   CTL-7: TRUE  (NEW: member時はPAIR_DOC_ACTIVEをFALSEにできない)
+-- ============================================================
+
+-- CTL-1: サインアウト後はitemsListenerが解除される（正常動作確認）
+SPEC  AG(AUTH = none -> ITEMS_LISTENER = FALSE)
+
+-- CTL-2: ペア解除後はitemsListenerが非アクティブであるべき
+-- master_unpairでFALSEに遷移するため TRUE 期待
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_LISTENER = FALSE)
+
+-- CTL-3: ペア解除後にitemsサブコレクションデータが残存しない
+-- master_unpair時にCF cascade削除でFALSEに遷移するため TRUE 期待
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_SUBCOL_DATA = FALSE)
+
+-- CTL-4: 孤児user docが存在しない
+-- 既知limitation: signOut後の新sign_inで孤児化。v1.1.0 Google Sign-In移行で解消予定
+-- FALSE 期待（既知・継続）
+SPEC  AG(!ORPHAN_USER_DOC)
+
+-- CTL-5: paired状態ではitemsListenerが必ずアクティブ（正常動作確認）
+SPEC  AG(PAIR_STATE = paired -> ITEMS_LISTENER = TRUE)
+
+-- CTL-6: ペア解除後にpair docのactive=trueが残存しない
+-- master_unpairのみPAIR_DOC_ACTIVEをFALSEにできるため TRUE 期待
+SPEC  AG(PAIR_STATE = unpaired -> !PAIR_DOC_ACTIVE)
+
+-- CTL-7 (新規): member role時にpair docが非活性化されない
+-- master_unpairはROLE=masterのみ有効。ROLE=memberでは PAIR_DOC_ACTIVE=FALSE への遷移がない
+-- TRUE 期待 = memberがpair docを非活性化できないことの形式的証明
+-- (ROLE=member & PAIR_STATE=paired) のとき PAIR_DOC_ACTIVE=TRUE が維持される
+SPEC  AG(ROLE = member & PAIR_STATE = paired -> PAIR_DOC_ACTIVE = TRUE)

@@ -1,0 +1,52 @@
+*** This is NuSMV 2.6.0 (compiled on Wed Oct 14 15:36:56 2015)
+*** Enabled addons are: compass
+*** For more information on NuSMV see <http://nusmv.fbk.eu>
+*** or email to <nusmv-users@list.fbk.eu>.
+*** Please report bugs to <Please report bugs to <nusmv-users@fbk.eu>>
+
+*** Copyright (c) 2010-2014, Fondazione Bruno Kessler
+
+*** This version of NuSMV is linked to the CUDD library version 2.4.1
+*** Copyright (c) 1995-2004, Regents of the University of Colorado
+
+*** This version of NuSMV is linked to the MiniSat SAT solver. 
+*** See http://minisat.se/MiniSat.html
+*** Copyright (c) 2003-2006, Niklas Een, Niklas Sorensson
+*** Copyright (c) 2007-2010, Niklas Sorensson
+
+-- specification AG !ORPHAN_USER_DOC  is false
+-- as demonstrated by the following execution sequence
+Trace Description: CTL Counterexample 
+Trace Type: Counterexample 
+  -> State: 1.1 <-
+    EVENT = noop
+    ROLE = none
+    AUTH = none
+    PAIR_STATE = unpaired
+    ITEMS_LISTENER = FALSE
+    JOIN_LISTENER = FALSE
+    FCM_SYNCED = FALSE
+    PREV_SIGN_IN = FALSE
+    ORPHAN_USER_DOC = FALSE
+    PAIR_DOC_ACTIVE = FALSE
+    ITEMS_SUBCOL_DATA = FALSE
+  -> State: 1.2 <-
+    EVENT = sign_in_master
+  -> State: 1.3 <-
+    EVENT = reinstall
+    ROLE = master
+    AUTH = signed_in
+    FCM_SYNCED = TRUE
+    PREV_SIGN_IN = TRUE
+  -> State: 1.4 <-
+    EVENT = sign_in_master
+    ROLE = none
+    AUTH = none
+    FCM_SYNCED = FALSE
+    ORPHAN_USER_DOC = TRUE
+-- specification AG (AUTH = none -> ITEMS_LISTENER = FALSE)  is true
+-- specification AG (PAIR_STATE = unpaired -> ITEMS_LISTENER = FALSE)  is true
+-- specification AG (PAIR_STATE = unpaired -> ITEMS_SUBCOL_DATA = FALSE)  is true
+-- specification AG (PAIR_STATE = paired -> ITEMS_LISTENER = TRUE)  is true
+-- specification AG (PAIR_STATE = unpaired -> !PAIR_DOC_ACTIVE)  is true
+-- specification AG ((ROLE = member & PAIR_STATE = paired) -> PAIR_DOC_ACTIVE = TRUE)  is true

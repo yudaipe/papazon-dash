@@ -1,0 +1,238 @@
+MODULE main
+
+-- papazon-dash 状態遷移モデル v1.0.0
+-- 対象実装: FirebaseRepository.kt / PapazonMessagingService.kt
+-- 目的: unpair/logout/orphan/FCM系バグをCTL検査で網羅検証
+-- 実行: /home/ysuzuki/.local/bin/NuSMV papazon_dash.smv
+-- NuSMV 2.6.0 対応
+
+VAR
+  -- 非決定的入力イベント（環境側・毎ステップ非決定的選択）
+  EVENT : {sign_in, sign_out, reinstall,
+           create_pair, member_joined,
+           join_pair, unpair, add_item, noop};
+
+  -- ===== Android ローカル状態 =====
+
+  -- AUTH: Firebase anonymous auth 状態
+  -- signed_in = auth.currentUser != null
+  -- 対応: FirebaseRepository.signIn() L51, signOut() L76
+  AUTH : {none, signed_in};
+
+  -- PAIR_STATE: ペアリング状態
+  -- unpaired = _isPaired=false, inviting = generateInviteCode後,
+  -- paired = setPaired()後 (_isPaired=true)
+  -- 対応: FirebaseRepository._isPaired L39, setPaired() L255
+  PAIR_STATE : {unpaired, inviting, paired};
+
+  -- ITEMS_LISTENER: items snapshotListener 登録状態
+  -- TRUE = openItemsRegistration != null
+  -- 対応: FirebaseRepository.openItemsRegistration L32, listenToItems() L306
+  ITEMS_LISTENER : boolean;
+
+  -- JOIN_LISTENER: pairJoin snapshotListener 登録状態
+  -- TRUE = pairJoinListenerRegistration != null
+  -- 対応: FirebaseRepository.pairJoinListenerRegistration L34
+  JOIN_LISTENER : boolean;
+
+  -- ===== Firestore 状態 =====
+
+  -- FCM_SYNCED: users/{uid}.fcmToken が現在のトークンと一致しているか
+  -- TRUE = refreshFcmToken()またはonNewToken()でFirestoreに保存済み
+  -- 対応: FirebaseRepository.refreshFcmToken() L283, PapazonMessagingService.onNewToken() L24
+  FCM_SYNCED : boolean;
+
+  -- PREV_SIGN_IN: 過去に1回以上sign_inしてuser doc作成済みか（孤児doc判定用補助変数）
+  PREV_SIGN_IN : boolean;
+
+  -- ORPHAN_USER_DOC: 旧uidのusers/{old_uid}孤児ドキュメント存在フラグ
+  -- BUG: signOut()はFirestoreのusers/{uid}を削除しない
+  --      2回目のsign_inで新anonymous uid生成 → 旧docが孤児化
+  -- 対応: FirebaseRepository.signOut() L76 (deleteが存在しない)
+  ORPHAN_USER_DOC : boolean;
+
+  -- PAIR_DOC_ACTIVE: Firestoreのpairs/{pairId}.active=trueのdocが残存
+  -- BUG: unpair()はFirestoreのpair docを更新しない
+  --      Firestore rule: allow delete: if false → クライアントからdoc削除不可
+  -- 対応: FirebaseRepository.unpair() L234 (Firestore更新なし)
+  PAIR_DOC_ACTIVE : boolean;
+
+  -- ITEMS_SUBCOL_DATA: pairs/{pairId}/items/に未削除データが存在
+  -- BUG: unpair()はitemsサブコレクションを削除しない
+  -- 対応: FirebaseRepository.unpair() L234 (サブコレクション削除なし)
+  ITEMS_SUBCOL_DATA : boolean;
+
+ASSIGN
+  init(EVENT)             := noop;
+  init(AUTH)              := none;
+  init(PAIR_STATE)        := unpaired;
+  init(ITEMS_LISTENER)    := FALSE;
+  init(JOIN_LISTENER)     := FALSE;
+  init(FCM_SYNCED)        := FALSE;
+  init(PREV_SIGN_IN)      := FALSE;
+  init(ORPHAN_USER_DOC)   := FALSE;
+  init(PAIR_DOC_ACTIVE)   := FALSE;
+  init(ITEMS_SUBCOL_DATA) := FALSE;
+
+  -- EVENT: 毎ステップ非決定的選択（環境）
+  next(EVENT) := {sign_in, sign_out, reinstall,
+                  create_pair, member_joined,
+                  join_pair, unpair, add_item, noop};
+
+  -- AUTH 遷移
+  -- sign_in: signInAnonymously()成功 または既存ユーザー再利用 (L51-73)
+  -- sign_out: auth.signOut() (L82)
+  -- reinstall: アプリデータ消去 → Firebase auth状態リセット
+  next(AUTH) :=
+    case
+      EVENT = sign_in  & AUTH = none  : signed_in;
+      EVENT = sign_out                : none;
+      EVENT = reinstall               : none;
+      TRUE                            : AUTH;
+    esac;
+
+  -- PAIR_STATE 遷移
+  -- create_pair: generateInviteCode() (L89) → inviting
+  -- member_joined: startListeningForMemberJoin()がmember_uid検知 (L132) → paired
+  -- join_pair: joinByCode()成功→setPaired() (L174) → paired
+  -- unpair: unpair() (L234) → ローカルstate=unpaired (Firestoreは変更なし)
+  -- sign_out: signOut()でstate reset (L76)
+  next(PAIR_STATE) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & PAIR_STATE = unpaired : inviting;
+      EVENT = member_joined & PAIR_STATE = inviting                    : paired;
+      EVENT = join_pair     & AUTH = signed_in & PAIR_STATE = unpaired : paired;
+      EVENT = unpair        & PAIR_STATE = paired                      : unpaired;
+      EVENT = sign_out                                                  : unpaired;
+      EVENT = reinstall                                                 : unpaired;
+      TRUE                                                              : PAIR_STATE;
+    esac;
+
+  -- ITEMS_LISTENER 遷移
+  -- listenToItems()はsetPaired()から呼ばれる (L267)
+  -- signOut()は全listenerを削除する (L77-79)
+  -- ★BUG: unpair()はopenItemsRegistration?.remove()を呼ばない
+  --   → unpair後もlistenerが残存しFirestore通信が継続する
+  next(ITEMS_LISTENER) :=
+    case
+      EVENT = member_joined & PAIR_STATE = inviting                : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = sign_out                                             : FALSE;
+      EVENT = reinstall                                            : FALSE;
+      -- BUG: EVENT = unpair → FALSE が存在しない（意図的にバグを再現）
+      TRUE                                                         : ITEMS_LISTENER;
+    esac;
+
+  -- JOIN_LISTENER 遷移
+  -- startListeningForMemberJoin()はgenerateInviteCode()後に呼ばれる (L110)
+  -- member検知後にself-remove() (L134-135)
+  -- signOut()でremove() (L79)
+  next(JOIN_LISTENER) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = member_joined & PAIR_STATE = inviting                    : FALSE;
+      EVENT = sign_out                                                  : FALSE;
+      EVENT = reinstall                                                 : FALSE;
+      TRUE                                                              : JOIN_LISTENER;
+    esac;
+
+  -- PREV_SIGN_IN 遷移（孤児doc発生の前提条件トラッカー）
+  next(PREV_SIGN_IN) :=
+    case
+      EVENT = sign_in & AUTH = none : TRUE;
+      TRUE                          : PREV_SIGN_IN;
+    esac;
+
+  -- ORPHAN_USER_DOC 遷移
+  -- BUG: signOut()はFirestoreのusers/{uid}を削除しない (L76-87)
+  --      2回目以降のsign_inで新anonymous uid発行 → 旧uid docが孤児化
+  -- 修正案: CF onAuthUserDeleted hookでusers/{uid}削除、またはGoogle Sign-In移行
+  next(ORPHAN_USER_DOC) :=
+    case
+      -- 2回目以降のsign_in: 旧uid(anonymous)のdocが孤児に
+      EVENT = sign_in   & AUTH = none & PREV_SIGN_IN = TRUE : TRUE;
+      -- reinstall後sign_in相当: 新anonymous uid → 旧docが孤児に
+      EVENT = reinstall & PREV_SIGN_IN = TRUE               : TRUE;
+      TRUE                                                  : ORPHAN_USER_DOC;
+    esac;
+
+  -- FCM_SYNCED 遷移
+  -- bindUser()→refreshFcmToken()でFCMトークン同期 (L283-303)
+  -- PapazonMessagingService.onNewToken()でも更新 (L24-36)
+  -- ★BUG候補: onNewToken()がsign_in前に呼ばれると
+  --   currentUser==null → return → トークン未保存 (PapazonMessagingService.kt L26)
+  --   → その後sign_in: bindUser()→refreshFcmToken()で最終的には同期 ✓
+  --   → reinstall時は非決定的（timingに依存）
+  next(FCM_SYNCED) :=
+    case
+      EVENT = sign_in  & AUTH = none : TRUE;     -- bindUser()→refreshFcmToken()
+      EVENT = sign_out               : FALSE;    -- sessionクリア
+      EVENT = reinstall              : {TRUE, FALSE};  -- token refresh timing次第
+      TRUE                           : FCM_SYNCED;
+    esac;
+
+  -- PAIR_DOC_ACTIVE 遷移
+  -- pairs/{pairId}ドキュメントはcreate/join時にactive=trueで作成される
+  -- ★BUG: unpair()はFirestoreのpair docを更新しない (L234-238)
+  --   Firestore rules: allow delete: if false → クライアントから削除不可 (firestore.rules L25)
+  -- 修正案: CF関数 onPairUnpaired でpairs/{pairId}.active=false更新
+  next(PAIR_DOC_ACTIVE) :=
+    case
+      EVENT = create_pair & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = join_pair   & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      -- BUG: EVENT = unpair → FALSE が存在しない（意図的にバグを再現）
+      TRUE                                                            : PAIR_DOC_ACTIVE;
+    esac;
+
+  -- ITEMS_SUBCOL_DATA 遷移
+  -- addItem()でpairs/{pairId}/items/にデータ追加 (L194-210)
+  -- ★BUG: unpair()はitemsサブコレクションを削除しない (L234-238)
+  -- 修正案: CF関数 onPairUnpaired でitemsサブコレクションをCascade削除
+  next(ITEMS_SUBCOL_DATA) :=
+    case
+      EVENT = add_item & PAIR_STATE = paired : TRUE;
+      -- BUG: EVENT = unpair → FALSE が存在しない（意図的にバグを再現）
+      TRUE                                   : ITEMS_SUBCOL_DATA;
+    esac;
+
+
+-- ============================================================
+-- CTL検証式 (6本)
+-- 期待結果:
+--   CTL-1: TRUE  (signOut正常動作)
+--   CTL-2: FALSE (BUG: unpairでlistener未解除)
+--   CTL-3: FALSE (BUG: unpairでitems未削除)
+--   CTL-4: FALSE (BUG: signOut後の孤児user doc)
+--   CTL-5: TRUE  (setPaired正常動作)
+--   CTL-6: FALSE (BUG: unpairでpair doc未非活性化)
+-- ============================================================
+
+-- CTL-1: サインアウト後はitemsListenerが解除される（正常動作確認）
+-- signOut()がopenItemsRegistration?.remove()を呼ぶため TRUE 期待
+-- 対応: FirebaseRepository.signOut() L77
+SPEC  AG(AUTH = none -> ITEMS_LISTENER = FALSE)
+
+-- CTL-2: ペア解除後はitemsListenerが非アクティブであるべき
+-- BUG: unpair()がlistenerを解除しないため FALSE 期待 → 反例でunpair後のlistener残存を確認
+-- 修正: FirebaseRepository.unpair()に openItemsRegistration?.remove() / historyRegistration?.remove() 追加
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_LISTENER = FALSE)
+
+-- CTL-3: ペア解除後にitemsサブコレクションデータが残存しない
+-- BUG: unpair()がFirestoreのitemsを削除しないため FALSE 期待 → 反例でitemsデータ孤立を確認
+-- 修正: CF関数 onPairUnpaired でpairs/{pairId}/items 以下をCascade削除
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_SUBCOL_DATA = FALSE)
+
+-- CTL-4: 孤児user docが存在しない
+-- BUG: signOut()がFirestoreのusers/{uid}を削除しないため FALSE 期待 → 反例でsignOut+signIn後の孤児を確認
+-- 修正: CF onAuthUserDeleted hookでusers/{uid}削除、またはv1.1.0でGoogle Sign-In移行
+SPEC  AG(!ORPHAN_USER_DOC)
+
+-- CTL-5: paired状態ではitemsListenerが必ずアクティブ（正常動作確認）
+-- setPaired()→listenToItems()の呼出チェーンが正常のため TRUE 期待
+-- 対応: FirebaseRepository.setPaired() L255, listenToItems() L306
+SPEC  AG(PAIR_STATE = paired -> ITEMS_LISTENER = TRUE)
+
+-- CTL-6: ペア解除後にpair docのactive=trueが残存しない
+-- BUG: unpair()がpair docを非活性化しないため FALSE 期待 → 反例でstale pair doc残存を確認
+-- 修正: CF関数 onPairUnpaired でpairs/{pairId}.active=false更新
+SPEC  AG(PAIR_STATE = unpaired -> !PAIR_DOC_ACTIVE)

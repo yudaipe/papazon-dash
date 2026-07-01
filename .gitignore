@@ -1,0 +1,30 @@
+# === 秘匿情報 (絶対commit禁止) ===
+android/app/google-services.json
+.firebaserc
+android/local.properties
+android/gradle.properties.local
+*.keystore
+*.jks
+*.env
+*.env.*
+serviceAccountKey.json
+firebase-adminsdk-*.json
+
+# === Android build成果物 ===
+android/.gradle/
+android/app/build/
+android/build/
+android/.idea/
+android/*.iml
+android/local.properties
+
+# === Firebase / Node ===
+functions/lib/
+functions/node_modules/
+node_modules/
+.firebase/
+.firebaserc.local
+
+# === その他 ===
+*.DS_Store
+*.swp

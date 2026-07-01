@@ -1,0 +1,142 @@
+MODULE main
+
+-- papazon-dash 修正後状態遷移モデル v1.0.1 (Phase E: 再検査用)
+-- 修正内容:
+--   CTL-2: unpair()にlistener解除追加 (FirebaseRepository.kt)
+--   CTL-3: CF onPairDeactivated でitems cascade削除 (functions/src/index.ts)
+--   CTL-6: unpair()でFirestore pairs/{id}.active=false更新 (FirebaseRepository.kt)
+-- CTL-4 (孤児user doc) は v1.1.0 Google Sign-In移行で解消予定・本モデルでは未修正
+-- NuSMV 2.6.0 実行: /home/ysuzuki/.local/bin/NuSMV papazon_dash_fixed.smv
+
+VAR
+  EVENT : {sign_in, sign_out, reinstall,
+           create_pair, member_joined,
+           join_pair, unpair, add_item, noop};
+
+  AUTH            : {none, signed_in};
+  PAIR_STATE      : {unpaired, inviting, paired};
+  ITEMS_LISTENER  : boolean;
+  JOIN_LISTENER   : boolean;
+  FCM_SYNCED      : boolean;
+  PREV_SIGN_IN    : boolean;
+  ORPHAN_USER_DOC : boolean;
+  PAIR_DOC_ACTIVE : boolean;
+  ITEMS_SUBCOL_DATA : boolean;
+
+ASSIGN
+  init(EVENT)             := noop;
+  init(AUTH)              := none;
+  init(PAIR_STATE)        := unpaired;
+  init(ITEMS_LISTENER)    := FALSE;
+  init(JOIN_LISTENER)     := FALSE;
+  init(FCM_SYNCED)        := FALSE;
+  init(PREV_SIGN_IN)      := FALSE;
+  init(ORPHAN_USER_DOC)   := FALSE;
+  init(PAIR_DOC_ACTIVE)   := FALSE;
+  init(ITEMS_SUBCOL_DATA) := FALSE;
+
+  next(EVENT) := {sign_in, sign_out, reinstall,
+                  create_pair, member_joined,
+                  join_pair, unpair, add_item, noop};
+
+  next(AUTH) :=
+    case
+      EVENT = sign_in  & AUTH = none  : signed_in;
+      EVENT = sign_out                : none;
+      EVENT = reinstall               : none;
+      TRUE                            : AUTH;
+    esac;
+
+  next(PAIR_STATE) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & PAIR_STATE = unpaired : inviting;
+      EVENT = member_joined & PAIR_STATE = inviting                    : paired;
+      EVENT = join_pair     & AUTH = signed_in & PAIR_STATE = unpaired : paired;
+      EVENT = unpair        & PAIR_STATE = paired                      : unpaired;
+      EVENT = sign_out                                                  : unpaired;
+      EVENT = reinstall                                                 : unpaired;
+      TRUE                                                              : PAIR_STATE;
+    esac;
+
+  -- CTL-2 fix: unpairでlistenerを解除（FALSEケースを追加）
+  next(ITEMS_LISTENER) :=
+    case
+      EVENT = member_joined & PAIR_STATE = inviting                : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = unpair   & PAIR_STATE = paired                       : FALSE;  -- FIX
+      EVENT = sign_out                                             : FALSE;
+      EVENT = reinstall                                            : FALSE;
+      TRUE                                                         : ITEMS_LISTENER;
+    esac;
+
+  next(JOIN_LISTENER) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = member_joined & PAIR_STATE = inviting                    : FALSE;
+      EVENT = sign_out                                                  : FALSE;
+      EVENT = reinstall                                                 : FALSE;
+      TRUE                                                              : JOIN_LISTENER;
+    esac;
+
+  next(PREV_SIGN_IN) :=
+    case
+      EVENT = sign_in & AUTH = none : TRUE;
+      TRUE                          : PREV_SIGN_IN;
+    esac;
+
+  -- CTL-4 未修正（v1.1.0 Google Sign-In移行まで既知limitation）
+  next(ORPHAN_USER_DOC) :=
+    case
+      EVENT = sign_in   & AUTH = none & PREV_SIGN_IN = TRUE : TRUE;
+      EVENT = reinstall & PREV_SIGN_IN = TRUE               : TRUE;
+      TRUE                                                  : ORPHAN_USER_DOC;
+    esac;
+
+  next(FCM_SYNCED) :=
+    case
+      EVENT = sign_in  & AUTH = none : TRUE;
+      EVENT = sign_out               : FALSE;
+      EVENT = reinstall              : {TRUE, FALSE};
+      TRUE                           : FCM_SYNCED;
+    esac;
+
+  -- CTL-6 fix: unpairでPAIR_DOC_ACTIVEをFALSEに（Firestoreのactive=false更新）
+  next(PAIR_DOC_ACTIVE) :=
+    case
+      EVENT = create_pair & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = join_pair   & AUTH = signed_in & PAIR_STATE = unpaired : TRUE;
+      EVENT = unpair      & PAIR_STATE = paired                      : FALSE;  -- FIX
+      EVENT = sign_out                                               : FALSE;
+      TRUE                                                           : PAIR_DOC_ACTIVE;
+    esac;
+
+  -- CTL-3 fix: CF onPairDeactivatedがitemsを削除（unpair→PAIR_DOC_ACTIVEがFALSEになると同時に削除）
+  next(ITEMS_SUBCOL_DATA) :=
+    case
+      EVENT = add_item & PAIR_STATE = paired                    : TRUE;
+      EVENT = unpair   & PAIR_STATE = paired                    : FALSE;  -- FIX (CF cascade)
+      TRUE                                                       : ITEMS_SUBCOL_DATA;
+    esac;
+
+
+-- ============================================================
+-- CTL検証式 (6本) - 修正後期待結果:
+--   CTL-1: TRUE  (変化なし)
+--   CTL-2: TRUE  (FIX済)
+--   CTL-3: TRUE  (FIX済)
+--   CTL-4: FALSE (既知limitation・v1.1.0送り)
+--   CTL-5: TRUE  (変化なし)
+--   CTL-6: TRUE  (FIX済)
+-- ============================================================
+
+SPEC  AG(AUTH = none -> ITEMS_LISTENER = FALSE)
+
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_LISTENER = FALSE)
+
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_SUBCOL_DATA = FALSE)
+
+SPEC  AG(!ORPHAN_USER_DOC)
+
+SPEC  AG(PAIR_STATE = paired -> ITEMS_LISTENER = TRUE)
+
+SPEC  AG(PAIR_STATE = unpaired -> !PAIR_DOC_ACTIVE)
