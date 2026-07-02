@@ -11,11 +11,14 @@ import javax.inject.Inject
 
 @HiltViewModel
 class AppViewModel @Inject constructor(
-    repository: FirebaseRepository,
+    private val repository: FirebaseRepository,
 ) : ViewModel() {
     val currentUser: StateFlow<User?> = repository.currentUser
     val isPaired: StateFlow<Boolean> = repository.isPaired
     val pairInfo: StateFlow<PairInfo?> = repository.pairInfo
     val openItems: StateFlow<List<Item>> = repository.items
     val historyItems: StateFlow<List<Item>> = repository.historyItems
+
+    fun unpair() = repository.unpair()
+    fun signOut() = repository.signOut()
 }

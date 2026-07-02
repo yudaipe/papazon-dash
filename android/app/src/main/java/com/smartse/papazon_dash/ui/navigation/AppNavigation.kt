@@ -7,6 +7,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.smartse.papazon_dash.data.model.UserRole
 import com.smartse.papazon_dash.ui.screens.history.HistoryScreen
 import com.smartse.papazon_dash.ui.screens.main.MainScreen
 import com.smartse.papazon_dash.ui.screens.main.MainSlaveScreen
@@ -37,18 +38,28 @@ fun AppNavigation() {
     NavHost(navController = navController, startDestination = Screen.Splash.route) {
         composable(Screen.Splash.route) {
             SplashScreen(
-                onSignedIn = { navController.navigate(Screen.MainMaster.route) { popUpTo(0) } },
+                onNeedsPairing = { navController.navigate(Screen.Pairing.route) { popUpTo(0) } },
+                onAlreadyPaired = { role ->
+                    val route = if (role == UserRole.MASTER) Screen.MainMaster.route
+                    else Screen.MainSlave.route
+                    navController.navigate(route) { popUpTo(0) }
+                },
                 onNotSignedIn = { navController.navigate(Screen.SignIn.route) { popUpTo(0) } },
             )
         }
 
         composable(Screen.SignIn.route) {
             SignInScreen(
-                onSignInSuccess = {
+                onNeedsPairing = {
                     navController.navigate(Screen.Pairing.route) {
                         popUpTo(Screen.SignIn.route) { inclusive = true }
                     }
-                }
+                },
+                onAlreadyPaired = { role ->
+                    val route = if (role == UserRole.MASTER) Screen.MainMaster.route
+                    else Screen.MainSlave.route
+                    navController.navigate(route) { popUpTo(0) }
+                },
             )
         }
 
@@ -105,11 +116,13 @@ fun AppNavigation() {
                 userRole = currentUser?.role,
                 onBack = { navController.popBackStack() },
                 onUnpair = {
+                    appViewModel.unpair()
                     navController.navigate(Screen.Pairing.route) {
                         popUpTo(0)
                     }
                 },
                 onSignOut = {
+                    appViewModel.signOut()
                     navController.navigate(Screen.SignIn.route) {
                         popUpTo(0)
                     }

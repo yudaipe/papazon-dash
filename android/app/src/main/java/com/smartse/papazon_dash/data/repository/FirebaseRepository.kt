@@ -2,7 +2,9 @@ package com.smartse.papazon_dash.data.repository
 
 import android.util.Log
 import com.google.firebase.Timestamp
+import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -48,11 +50,168 @@ class FirebaseRepository @Inject constructor(
     private val _historyItems = MutableStateFlow<List<Item>>(emptyList())
     val historyItems: StateFlow<List<Item>> = _historyItems.asStateFlow()
 
+    // ── Email/Password Auth (v1.0.2) ──────────────────────────────────────────
+
+    fun createAccount(
+        email: String,
+        password: String,
+        role: UserRole,
+        name: String,
+        onResult: (Boolean, String?) -> Unit,
+    ) {
+        val resolvedName = name.ifBlank { role.displayName }
+        val existing = auth.currentUser
+
+        if (existing != null && existing.isAnonymous) {
+            // Link anonymous account to email/password (preserves UID + all data)
+            val credential = EmailAuthProvider.getCredential(email, password)
+            Log.d(TAG, "createAccount: linking anonymous uid=${existing.uid} to email=$email")
+            existing.linkWithCredential(credential)
+                .addOnSuccessListener { result ->
+                    val uid = result.user?.uid.orEmpty()
+                    Log.d(TAG, "linkWithCredential SUCCESS: uid=$uid")
+                    bindUser(uid, role, resolvedName)
+                    onResult(true, null)
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "linkWithCredential FAILED: ${e.message}, falling back to createFreshAccount")
+                    createFreshAccount(email, password, role, resolvedName, onResult)
+                }
+        } else {
+            createFreshAccount(email, password, role, resolvedName, onResult)
+        }
+    }
+
+    private fun createFreshAccount(
+        email: String,
+        password: String,
+        role: UserRole,
+        name: String,
+        onResult: (Boolean, String?) -> Unit,
+    ) {
+        Log.d(TAG, "createFreshAccount: email=$email role=$role")
+        auth.createUserWithEmailAndPassword(email, password)
+            .addOnSuccessListener { result ->
+                val uid = result.user?.uid.orEmpty()
+                Log.d(TAG, "createUserWithEmailAndPassword SUCCESS: uid=$uid")
+                bindUser(uid, role, name)
+                onResult(true, null)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "createUserWithEmailAndPassword FAILED: ${e.message}")
+                onResult(false, mapFirebaseError(e))
+            }
+    }
+
+    fun signInWithEmail(
+        email: String,
+        password: String,
+        onResult: (Boolean, String?) -> Unit,
+    ) {
+        Log.d(TAG, "signInWithEmail: email=$email")
+        auth.signInWithEmailAndPassword(email, password)
+            .addOnSuccessListener { result ->
+                val uid = result.user?.uid.orEmpty()
+                Log.d(TAG, "signInWithEmailAndPassword SUCCESS: uid=$uid")
+                loadUserProfile(uid) { profile ->
+                    if (profile != null) {
+                        _currentUser.value = profile
+                        if (profile.pairId != null) {
+                            activePairId = profile.pairId
+                            setPaired(profile.pairId)
+                        }
+                        refreshFcmToken(uid)
+                        onResult(true, null)
+                    } else {
+                        // Profile not found — user needs to re-register
+                        Log.w(TAG, "signInWithEmail: profile not found for uid=$uid")
+                        onResult(false, "アカウント情報が見つかりません。再度登録してください")
+                    }
+                }
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "signInWithEmailAndPassword FAILED: ${e.message}")
+                onResult(false, mapFirebaseError(e))
+            }
+    }
+
+    fun tryAutoSignIn(onComplete: () -> Unit = {}) {
+        val firebaseUser = auth.currentUser
+        if (firebaseUser == null || firebaseUser.isAnonymous) {
+            Log.d(TAG, "tryAutoSignIn: no email/password user found")
+            onComplete()
+            return
+        }
+        Log.d(TAG, "tryAutoSignIn: email/password user uid=${firebaseUser.uid}")
+        loadUserProfile(firebaseUser.uid) { profile ->
+            if (profile != null) {
+                _currentUser.value = profile
+                if (profile.pairId != null) {
+                    activePairId = profile.pairId
+                    setPaired(profile.pairId)
+                }
+                refreshFcmToken(firebaseUser.uid)
+            }
+            onComplete()
+        }
+    }
+
+    private fun loadUserProfile(uid: String, onResult: (User?) -> Unit) {
+        firestore.collection("users").document(uid)
+            .get()
+            .addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    val roleStr = doc.getString("role") ?: UserRole.MASTER.firestoreValue
+                    val role = UserRole.values().firstOrNull { it.firestoreValue == roleStr }
+                        ?: UserRole.MASTER
+                    val user = User(
+                        uid = uid,
+                        displayName = doc.getString("displayName") ?: role.displayName,
+                        role = role,
+                        pairId = doc.getString("pairId"),
+                    )
+                    Log.d(TAG, "loadUserProfile: loaded uid=$uid role=$role pairId=${user.pairId}")
+                    onResult(user)
+                } else {
+                    Log.w(TAG, "loadUserProfile: no doc for uid=$uid")
+                    onResult(null)
+                }
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "loadUserProfile FAILED: uid=$uid ${e.message}")
+                onResult(null)
+            }
+    }
+
+    private fun mapFirebaseError(e: Exception): String {
+        val msg = e.message ?: ""
+        return when {
+            e is FirebaseAuthUserCollisionException ||
+                msg.contains("email address is already in use", ignoreCase = true) ->
+                "このメールアドレスは既に登録されています"
+            msg.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true) ||
+                msg.contains("password is invalid", ignoreCase = true) ||
+                msg.contains("no user record", ignoreCase = true) ->
+                "メールアドレスまたはパスワードが間違っています"
+            msg.contains("badly formatted", ignoreCase = true) ||
+                msg.contains("INVALID_EMAIL", ignoreCase = true) ->
+                "メールアドレスの形式が正しくありません"
+            msg.contains("WEAK_PASSWORD", ignoreCase = true) ||
+                msg.contains("weak password", ignoreCase = true) ->
+                "パスワードは6文字以上で設定してください"
+            msg.contains("network", ignoreCase = true) ->
+                "ネットワーク接続を確認してください"
+            else -> "エラーが発生しました。しばらくしてから再試行してください"
+        }
+    }
+
+    // ── Anonymous Sign-In (legacy / fallback) ────────────────────────────────
+
     fun signIn(role: UserRole = UserRole.MASTER, name: String = "") {
         Log.d(TAG, "signIn() called: role=$role name=${name.ifBlank { "(default)" }}")
         val existing = auth.currentUser
         if (existing != null) {
-            Log.d(TAG, "signIn: existing Firebase user found uid=${existing.uid}, calling bindUser directly")
+            Log.d(TAG, "signIn: existing Firebase user found uid=${existing.uid}")
             bindUser(existing.uid, role, name)
             return
         }
@@ -73,11 +232,17 @@ class FirebaseRepository @Inject constructor(
             }
     }
 
+    // ── Sign-Out ─────────────────────────────────────────────────────────────
+
     fun signOut() {
+        Log.d(TAG, "signOut: clearing all state")
         openItemsRegistration?.remove()
         historyRegistration?.remove()
         pairJoinListenerRegistration?.remove()
         pairJoinListenerRegistration = null
+        openItemsRegistration = null
+        historyRegistration = null
+        activePairId = null
         auth.signOut()
         _currentUser.value = null
         _isPaired.value = false
@@ -85,6 +250,8 @@ class FirebaseRepository @Inject constructor(
         _items.value = emptyList()
         _historyItems.value = emptyList()
     }
+
+    // ── Pairing ───────────────────────────────────────────────────────────────
 
     fun generateInviteCode(): String {
         val user = _currentUser.value ?: return ""
@@ -187,6 +354,8 @@ class FirebaseRepository @Inject constructor(
             }
     }
 
+    // ── Items ─────────────────────────────────────────────────────────────────
+
     fun addItem(name: String) {
         val user = _currentUser.value ?: return
         val pairId = activePairId ?: user.pairId ?: return
@@ -233,19 +402,23 @@ class FirebaseRepository @Inject constructor(
 
     fun unpair() {
         val pairId = activePairId ?: _currentUser.value?.pairId
-        // CTL-2 fix: snapshot listenerを解除（未解除だとFirestore通信が漏れ続ける）
         openItemsRegistration?.remove()
         historyRegistration?.remove()
         openItemsRegistration = null
         historyRegistration = null
-        // activePairIdをクリア（再pairing時の旧pairId混入防止）
         activePairId = null
         _isPaired.value = false
         _pairInfo.value = null
         _items.value = emptyList()
         _historyItems.value = emptyList()
         _currentUser.value = _currentUser.value?.copy(pairId = null)
-        // CTL-6 fix: pair docをactive=falseに更新（CF onPairDeactivatedがitemsをcascade削除）
+        // Clear pairId from Firestore (v1.0.2: enables restore on re-login)
+        auth.currentUser?.uid?.let { uid ->
+            firestore.collection("users").document(uid)
+                .update(mapOf("pairId" to null))
+                .addOnSuccessListener { Log.d(TAG, "unpair: pairId cleared in Firestore uid=$uid") }
+                .addOnFailureListener { e -> Log.w(TAG, "unpair: pairId clear failed", e) }
+        }
         if (pairId != null) {
             Log.d(TAG, "unpair: deactivating pairId=$pairId")
             firestore.collection("pairs").document(pairId)
@@ -259,17 +432,13 @@ class FirebaseRepository @Inject constructor(
         }
     }
 
+    // ── Private helpers ───────────────────────────────────────────────────────
+
     private fun bindUser(uid: String, role: UserRole, name: String = "") {
         val resolvedName = name.ifBlank { role.displayName }
         Log.d(TAG, "bindUser: uid=$uid role=$role displayName=$resolvedName")
-        val user = User(
-            uid = uid,
-            displayName = resolvedName,
-            role = role,
-            pairId = null,
-        )
+        val user = User(uid = uid, displayName = resolvedName, role = role, pairId = null)
         _currentUser.value = user
-        Log.d(TAG, "bindUser: _currentUser updated → uid=${user.uid} role=${user.role} displayName=${user.displayName}")
         saveUserProfile(user)
         refreshFcmToken(uid)
     }
@@ -287,6 +456,13 @@ class FirebaseRepository @Inject constructor(
         _isPaired.value = true
         _currentUser.value = _currentUser.value?.copy(pairId = pairId)
         listenToItems()
+        // Persist pairId to Firestore (v1.0.2: enables restore on re-login)
+        _currentUser.value?.uid?.let { uid ->
+            firestore.collection("users").document(uid)
+                .update(mapOf("pairId" to pairId))
+                .addOnSuccessListener { Log.d(TAG, "setPaired: pairId persisted uid=$uid pairId=$pairId") }
+                .addOnFailureListener { e -> Log.w(TAG, "setPaired: pairId persist failed", e) }
+        }
     }
 
     private fun saveUserProfile(user: User) {
