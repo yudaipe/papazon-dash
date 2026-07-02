@@ -115,7 +115,7 @@ export const reminderSchedule = onSchedule(
     const now = Timestamp.now();
     const snapshot = await db.collectionGroup("items")
       .where("status", "==", "open")
-      .where("reminder_at", "<=", now)
+      .where("reminderAt", "<=", now)
       .limit(100)
       .get();
 
@@ -151,7 +151,7 @@ async function sendReminderForItem(doc: QueryDocumentSnapshot<DocumentData>): Pr
   });
 
   if (sent) {
-    await doc.ref.update({ reminder_at: null });
+    await doc.ref.update({ reminderAt: null });
   }
 }
 

@@ -1,6 +1,6 @@
-# papazon-dash — Firestore Schema (v1.0.2)
+# papazon-dash — Firestore Schema (v1.0.3)
 
-This document describes the Firestore data model as of v1.0.2 (Email/Password Auth integration).
+This document describes the Firestore data model as of v1.0.3 (external review response: rules v6.4 + reminderAt unified).
 
 ---
 
@@ -72,10 +72,7 @@ Shopping list items for a specific pair. Created in `FirebaseRepository.addItem(
 | `createdBy` | `string` | ✅ | UID of the user who added this item |
 | `createdAt` | `Timestamp` | ✅ | Creation time (server timestamp) |
 | `completedAt` | `Timestamp \| null` | — | Set when status changes to `"done"`. Cleared when toggled back to `"open"` |
-| `reminderAt` | `Timestamp \| null` | — | Android-side scheduled reminder time (UI not yet implemented in v1.0.2) |
-| `reminder_at` | `Timestamp \| null` | — | Cloud Function–side reminder time. Cleared after reminder FCM is sent |
-
-> **Note**: `reminderAt` (camelCase) is the Android client field; `reminder_at` (snake_case) is the Cloud Functions field. These will be unified in a future version.
+| `reminderAt` | `Timestamp \| null` | — | Scheduled reminder time. Set by Android client; read and cleared by `reminderSchedule` Cloud Function after FCM is sent |
 
 **Security**:
 - `read`: Only users in `pairs/{pairId}.partners`

@@ -66,6 +66,31 @@ versionCode: 1 → 3 / versionName: "1.0.0-v6-poc" → "1.0.2"
 - Anonymous Auth UI (匿名sign-in) を完全廃止 → Email/Password UIに置換
 - 既存Anonymous userが残っていれば linkWithCredential()で継続使用可
 
+## v1.0.3(外部レビュー対応・2026-07-02)
+
+cmd_673 完遂。外部レビュー指摘3点（P0/P1/P2）対応。Firestore Rules v6.4 本番deploy済み。
+
+| 項目 | 内容 | 状態 | 出典 |
+|------|------|------|------|
+| P0 firestore.rules v6.4 差分検証強化 | Branch B member join: affectedKeys().hasOnly(['member_uid','joined_at','partners']) + partners 4段階多段検証（hasAll/in/size+1） | ✅ 完了・本番deploy済 | cmd_673 Phase1 |
+| P1 SECURITY.md T-2 設計判断文書化 | T-2 v6.4対応: 実装フィールド乖離修正・partners多段検証の根拠記録。更新履歴v1.2追加 | ✅ 完了 | cmd_673 Phase2 |
+| P2 reminderAt 命名統一 | SCHEMA.md/firestore_index_design.md の reminder_at/reminderAt 二重表記を camelCase 統一 | ✅ 完了 | cmd_673 Phase3 |
+| 実機E2E 6テスト | arrayUnion互換確認含む: TEST1(join ✅) TEST2-4(DENY 3件 ✅) TEST5(arrayUnion SDK互換 ✅) TEST6(二重join防止 ✅) | ✅ 完了 | cmd_673 Phase4 |
+
+### 外部レビュー指摘の根拠
+
+| 指摘 | 問題 | 対応 |
+|------|------|------|
+| P0: rules v6.3 フィールドリスト乖離 | affectedKeys hasOnly(['member_uid','member_joined_at']) が実装の joined_at+partners と不一致 → 全 join が PERMISSION_DENIED | v6.4 でフィールドリスト修正＋partners多段検証追加 |
+| P1: 設計トレードオフ未文書化 | pairs list 全認証済み開放の根拠が明記なし | SECURITY.md T-1/T-2 に設計判断と残存リスクを明文化 |
+| P2: reminderAt 命名揺れ | reminder_at (snake_case) と reminderAt (camelCase) が混在 | SCHEMA.md/インデックス設計書を camelCase 統一 |
+
+### 重要発見: Firebase SDK vs REST API の arrayUnion 差異
+
+- REST API batchWrite + appendMissingElements 経由の arrayUnion → v6.4 rules が DENIED（rules 評価時 request.resource.data にトランスフォーム後の値が含まれない）
+- Firebase SDK (Web/Android) 経由の arrayUnion → v6.4 rules が PASS（gRPC プロトコルでは評価時にトランスフォーム後の値が含まれる）
+- 結論: Android アプリ（joinByCode()）は Firebase SDK 経由のため問題なし
+
 ## v1.1.0(追加機能・将来予定)
 
 | 項目 | 内容 | 出典 |
