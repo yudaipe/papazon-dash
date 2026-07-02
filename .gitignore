@@ -25,6 +25,10 @@ node_modules/
 .firebase/
 .firebaserc.local
 
+# === 内部ドキュメント (公開リポジトリ除外) ===
+html/
+intermediate/
+
 # === その他 ===
 *.DS_Store
 *.swp
