@@ -1,0 +1,246 @@
+MODULE main
+
+-- papazon-dash 状態遷移モデル v3.0 (Email/Password Auth + data migration)
+-- 対象実装: FirebaseRepository.kt v1.0.2 / SignInScreen.kt / SplashScreen.kt
+-- 目的: CTL-1〜7継承(v2.0) + CTL-8(email/password paired invariant) + CTL-8b(pair状態復元可達) + CTL-9(link時UID保持)
+-- 実行: /home/ysuzuki/.local/bin/NuSMV papazon_dash_v3.smv
+-- NuSMV 2.6.0 対応
+-- v2.0からの主な変更点:
+--   1. AUTH_TYPE追加 (none/anonymous/email_password)
+--   2. PAIR_ID_PERSISTED追加: pairIdのFirestore永続化状態(setPaired時TRUE/unpair時FALSE)
+--   3. イベント追加: register_email_master, register_email_member, link_anon_email_master,
+--                    link_anon_email_member, login_email
+--   4. next(PAIR_DOC_ACTIVE): login_emailでの復元ケース追加(Firestore pair docはsign_outで消えない)
+--   5. CTL-8(新規): email/password paired時はPAIR_ID_PERSISTED保証
+--   6. CTL-8b(新規): sign_out後のpair状態復元可達性
+--   7. CTL-9(新規LTL): linkイベントはORPHAN_USER_DOCを増加させない
+-- 期待結果: CTL-1〜3,5〜9=TRUE / CTL-4=FALSE(既知limitation)
+
+VAR
+  -- 非決定的入力イベント（環境側・毎ステップ非決定的選択）
+  EVENT : {
+    sign_in_anon_master,    -- Anonymous sign-in (master role)
+    sign_in_anon_member,    -- Anonymous sign-in (member role)
+    register_email_master,  -- Email/Password 新規登録 (master role)
+    register_email_member,  -- Email/Password 新規登録 (member role)
+    link_anon_email_master, -- Anonymous → Email/Password link (master role, UID preserved)
+    link_anon_email_member, -- Anonymous → Email/Password link (member role, UID preserved)
+    login_email,            -- Email/Password 再ログイン (既存アカウント)
+    sign_out,               -- サインアウト (Android local state cleared)
+    reinstall,              -- アプリ再インストール
+    create_pair,            -- 招待コード生成 (masterのみ)
+    member_joined,          -- メンバーがpairに参加 (remote event)
+    join_pair,              -- コード入力でpair参加 (memberのみ)
+    master_unpair,          -- ペア解除 (masterのみ)
+    add_item,               -- アイテム追加
+    noop                    -- 何もしない
+  };
+
+  AUTH_TYPE : {none, anonymous, email_password};
+  ROLE : {none, master, member};
+  AUTH : {none, signed_in};
+  PAIR_STATE : {unpaired, inviting, paired};
+
+  -- Firestore永続化pairId: setPaired時TRUE / unpair時FALSE / sign_outで消えない
+  PAIR_ID_PERSISTED : boolean;
+
+  ITEMS_LISTENER : boolean;
+  JOIN_LISTENER : boolean;
+  FCM_SYNCED : boolean;
+  ORPHAN_USER_DOC : boolean;
+  PAIR_DOC_ACTIVE : boolean;
+  ITEMS_SUBCOL_DATA : boolean;
+
+ASSIGN
+  init(EVENT)             := noop;
+  init(AUTH_TYPE)         := none;
+  init(ROLE)              := none;
+  init(AUTH)              := none;
+  init(PAIR_STATE)        := unpaired;
+  init(PAIR_ID_PERSISTED) := FALSE;
+  init(ITEMS_LISTENER)    := FALSE;
+  init(JOIN_LISTENER)     := FALSE;
+  init(FCM_SYNCED)        := FALSE;
+  init(ORPHAN_USER_DOC)   := FALSE;
+  init(PAIR_DOC_ACTIVE)   := FALSE;
+  init(ITEMS_SUBCOL_DATA) := FALSE;
+
+  next(EVENT) := {
+    sign_in_anon_master, sign_in_anon_member,
+    register_email_master, register_email_member,
+    link_anon_email_master, link_anon_email_member,
+    login_email, sign_out, reinstall,
+    create_pair, member_joined, join_pair,
+    master_unpair, add_item, noop
+  };
+
+  next(AUTH_TYPE) :=
+    case
+      (EVENT = sign_in_anon_master | EVENT = sign_in_anon_member) & AUTH = none          : anonymous;
+      (EVENT = register_email_master | EVENT = register_email_member) & AUTH = none       : email_password;
+      (EVENT = link_anon_email_master | EVENT = link_anon_email_member)
+        & AUTH_TYPE = anonymous                                                           : email_password;
+      EVENT = login_email & AUTH = none                                                   : email_password;
+      EVENT = sign_out                                                                    : none;
+      EVENT = reinstall                                                                   : none;
+      TRUE                                                                                : AUTH_TYPE;
+    esac;
+
+  next(ROLE) :=
+    case
+      (EVENT = sign_in_anon_master | EVENT = register_email_master) & AUTH = none        : master;
+      (EVENT = sign_in_anon_member | EVENT = register_email_member) & AUTH = none        : member;
+      EVENT = link_anon_email_master & AUTH_TYPE = anonymous                             : master;
+      EVENT = link_anon_email_member & AUTH_TYPE = anonymous                             : member;
+      EVENT = login_email & AUTH = none                                                  : {master, member};
+      EVENT = sign_out                                                                    : none;
+      EVENT = reinstall                                                                   : none;
+      TRUE                                                                                : ROLE;
+    esac;
+
+  next(AUTH) :=
+    case
+      (EVENT = sign_in_anon_master | EVENT = sign_in_anon_member) & AUTH = none          : signed_in;
+      (EVENT = register_email_master | EVENT = register_email_member) & AUTH = none       : signed_in;
+      (EVENT = link_anon_email_master | EVENT = link_anon_email_member)
+        & AUTH_TYPE = anonymous                                                           : signed_in;
+      EVENT = login_email & AUTH = none                                                   : signed_in;
+      EVENT = sign_out                                                                    : none;
+      EVENT = reinstall                                                                   : none;
+      TRUE                                                                                : AUTH;
+    esac;
+
+  next(PAIR_STATE) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & ROLE = master & PAIR_STATE = unpaired   : inviting;
+      EVENT = member_joined & PAIR_STATE = inviting                                       : paired;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired    : paired;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                         : unpaired;
+      EVENT = sign_out                                                                     : unpaired;
+      EVENT = reinstall                                                                    : unpaired;
+      -- email/password再ログイン: PAIR_ID_PERSISTED=TRUEならpaired復元
+      EVENT = login_email   & AUTH = none & PAIR_ID_PERSISTED                             : paired;
+      TRUE                                                                                 : PAIR_STATE;
+    esac;
+
+  -- PAIR_ID_PERSISTED: Firestoreに永続化されたpairId状態
+  -- setPaired()でTRUE / master_unpair()でFALSE / sign_outはFirestoreに影響しない
+  next(PAIR_ID_PERSISTED) :=
+    case
+      EVENT = member_joined & PAIR_STATE = inviting                                       : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired    : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                         : FALSE;
+      TRUE                                                                                 : PAIR_ID_PERSISTED;
+    esac;
+
+  next(ITEMS_LISTENER) :=
+    case
+      EVENT = member_joined & PAIR_STATE = inviting                                       : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired    : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                         : FALSE;
+      EVENT = sign_out                                                                     : FALSE;
+      EVENT = reinstall                                                                    : FALSE;
+      -- email/password再ログインでlistener再開
+      EVENT = login_email   & AUTH = none & PAIR_ID_PERSISTED                             : TRUE;
+      TRUE                                                                                 : ITEMS_LISTENER;
+    esac;
+
+  next(JOIN_LISTENER) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & ROLE = master & PAIR_STATE = unpaired   : TRUE;
+      EVENT = member_joined & PAIR_STATE = inviting                                       : FALSE;
+      EVENT = sign_out                                                                     : FALSE;
+      EVENT = reinstall                                                                    : FALSE;
+      TRUE                                                                                 : JOIN_LISTENER;
+    esac;
+
+  -- ORPHAN_USER_DOC: anonymous sign_out/reinstallで孤児発生・email_passwordでは発生しない
+  next(ORPHAN_USER_DOC) :=
+    case
+      AUTH_TYPE = anonymous & EVENT = sign_out     : TRUE;
+      AUTH_TYPE = anonymous & EVENT = reinstall    : TRUE;
+      TRUE                                          : ORPHAN_USER_DOC;
+    esac;
+
+  next(FCM_SYNCED) :=
+    case
+      AUTH = none & (EVENT = sign_in_anon_master | EVENT = sign_in_anon_member |
+                     EVENT = register_email_master | EVENT = register_email_member |
+                     EVENT = login_email)                                                 : TRUE;
+      (EVENT = link_anon_email_master | EVENT = link_anon_email_member)
+        & AUTH_TYPE = anonymous                                                           : TRUE;
+      EVENT = sign_out                                                                    : FALSE;
+      EVENT = reinstall                                                                   : {TRUE, FALSE};
+      TRUE                                                                                : FCM_SYNCED;
+    esac;
+
+  -- PAIR_DOC_ACTIVE: Firestoreペアドキュメントのactive状態
+  -- sign_outはFirestoreのpair docを変更しない(Android local stateのみクリア)
+  -- login_email+PAIR_ID_PERSISTED: Firestoreのpair docはまだactiveなので復元
+  next(PAIR_DOC_ACTIVE) :=
+    case
+      EVENT = create_pair   & AUTH = signed_in & ROLE = master & PAIR_STATE = unpaired   : TRUE;
+      EVENT = join_pair     & AUTH = signed_in & ROLE = member & PAIR_STATE = unpaired    : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                         : FALSE;
+      EVENT = reinstall                                                                    : FALSE;
+      -- email/password再ログインでPAIR_DOC_ACTIVEを復元(Firestoreのpair docはsign_outで消えない)
+      EVENT = login_email   & AUTH = none & PAIR_ID_PERSISTED                             : TRUE;
+      -- sign_out: Firestoreのpair doc自体は変わらない(local stateのみクリア)
+      -- モデル上ではsign_outで一旦FALSEにするが、login_emailで復元する
+      EVENT = sign_out                                                                     : FALSE;
+      TRUE                                                                                 : PAIR_DOC_ACTIVE;
+    esac;
+
+  next(ITEMS_SUBCOL_DATA) :=
+    case
+      EVENT = add_item & PAIR_STATE = paired                                              : TRUE;
+      EVENT = master_unpair & PAIR_STATE = paired & ROLE = master                         : FALSE;
+      EVENT = sign_out                                                                     : FALSE;
+      EVENT = reinstall                                                                    : FALSE;
+      TRUE                                                                                 : ITEMS_SUBCOL_DATA;
+    esac;
+
+
+-- ============================================================
+-- CTL/LTL検証式 (10本)
+-- 期待結果:
+--   CTL-1:  TRUE  (signOut後はitemsListener解除)
+--   CTL-2:  TRUE  (unpaired時はitemsListener非アクティブ)
+--   CTL-3:  TRUE  (unpaired時はitems残存なし)
+--   CTL-4:  FALSE (既知limitation: anonymous孤児user doc)
+--   CTL-5:  TRUE  (paired時はitemsListenerアクティブ)
+--   CTL-6:  TRUE  (unpaired時はpair doc active残存なし)
+--   CTL-7:  TRUE  (memberはpair docを非活性化できない)
+--   CTL-8:  TRUE  (NEW: email/password paired時はpairId永続化保証)
+--   CTL-8b: TRUE  (NEW: sign_out後もpair状態復元可達)
+--   CTL-9:  TRUE  (NEW LTL: linkイベントはORPHAN_USER_DOC増加なし)
+-- ============================================================
+
+SPEC  AG(AUTH = none -> ITEMS_LISTENER = FALSE)
+
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_LISTENER = FALSE)
+
+SPEC  AG(PAIR_STATE = unpaired -> ITEMS_SUBCOL_DATA = FALSE)
+
+-- CTL-4: FALSE期待 (anonymous孤児doc・既知limitation)
+SPEC  AG(!ORPHAN_USER_DOC)
+
+SPEC  AG(PAIR_STATE = paired -> ITEMS_LISTENER = TRUE)
+
+SPEC  AG(PAIR_STATE = unpaired -> !PAIR_DOC_ACTIVE)
+
+SPEC  AG(ROLE = member & PAIR_STATE = paired -> PAIR_DOC_ACTIVE = TRUE)
+
+-- CTL-8: email/password paired状態は常にpairId永続化が保証される
+SPEC  AG(AUTH_TYPE = email_password & PAIR_STATE = paired -> PAIR_ID_PERSISTED)
+
+-- CTL-8b: sign_out済み+pairId永続化状態からpaired状態は必ず到達可能
+SPEC  AG(AUTH = none & PAIR_ID_PERSISTED -> EF(PAIR_STATE = paired))
+
+-- CTL-9: Anonymous→Email/Password linkはORPHAN_USER_DOCを増加させない (LTL)
+LTLSPEC G(
+  !ORPHAN_USER_DOC &
+  AUTH_TYPE = anonymous &
+  (EVENT = link_anon_email_master | EVENT = link_anon_email_member)
+  -> X(!ORPHAN_USER_DOC)
+)

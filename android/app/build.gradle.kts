@@ -14,8 +14,8 @@ android {
         applicationId = "com.smartse.papazon_dash"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-v6-poc"
+        versionCode = 3
+        versionName = "1.0.2"
     }
 
     buildTypes {
