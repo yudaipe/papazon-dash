@@ -19,12 +19,28 @@ service cloud.firestore {
       allow create: if request.auth != null
         && request.auth.uid in request.resource.data.partners;
 
-      // master exclusive update (v6.1): master_uidのみfull update権限
-      // member joinは member_uid未設定時のみ許可（active変更は不可）
-      // Note: resource.data.get('member_uid', null) は存在しないフィールドをnullとして扱う
+      // master exclusive update (v6.4): master_uidのみfull update権限
+      // member join (Branch B): joinByCode()が書き込む3フィールドのみ許可
+      //   - member_uid: 自分のUIDのみ設定可
+      //   - joined_at: serverTimestamp (実装: joinByCode() line 337)
+      //   - partners: arrayUnion(自uid) — 既存partners保持+自uid追加+size+1厳格検証
+      //   - master_uid / active / inviteCode は不変
       allow update: if request.auth != null && (
+        // Branch A: master exclusive
         request.auth.uid == resource.data.master_uid
-        || resource.data.get('member_uid', null) == null
+        || (
+          // Branch B: member join — strictly constrained field diff
+          resource.data.get('member_uid', null) == null
+          && request.resource.data.member_uid == request.auth.uid
+          && request.resource.data.master_uid == resource.data.master_uid
+          && request.resource.data.active == resource.data.active
+          && request.resource.data.get('inviteCode', null) == resource.data.get('inviteCode', null)
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['member_uid', 'joined_at', 'partners'])
+          && request.resource.data.partners.hasAll(resource.data.partners)
+          && request.auth.uid in request.resource.data.partners
+          && request.resource.data.partners.size() == resource.data.partners.size() + 1
+        )
       );
 
       // 削除: 明示禁止（cascade削除はCloud Functions onPairDeactivated が担当）
