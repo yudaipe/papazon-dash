@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-カップル向けショッピングリスト共有 Android アプリ（SmartSE K01 コンペ優勝作品）。
+カップル向けショッピングリスト共有 Android アプリ。
 
 パートナーとリアルタイムで買い物リストを共有し、購入済みアイテムを FCM プッシュ通知で同期できます。
 

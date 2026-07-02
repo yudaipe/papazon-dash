@@ -171,8 +171,8 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 
 On first launch the app shows the Sign-In screen:
 
-1. One user selects **はなこ（奥様）** role and enters email + password → **アカウント作成**
-2. The same or another user selects **ひろし（旦那）** role and creates a second account
+1. One user selects **User A** role and enters email + password → **アカウント作成**
+2. The same or another user selects **User B** role and creates a second account
 3. The master user taps **招待コードを作成** and shares the 6-digit code
 4. The member user taps **招待コードで参加** and enters the code
 5. Both users are now paired and the shared shopping list opens
