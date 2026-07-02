@@ -2,7 +2,7 @@
 
 作成日: 2026-06-17
 cmd_id: cmd_594c (WBS 2.4)
-作成者: 足軽2号 (Claude Sonnet)
+Created by: Claude Sonnet
 
 ---
 

@@ -41,7 +41,7 @@ cmd_594d 調査が確認した事実（2026-06-16 取得）：
 |------|-----------|---------|-----------|
 | 業務機能6（新規依頼通知） | **可能** | WorkManager OneTimeWork + ローカル通知 | 通知到達遅延あり（Doze時 最大15分）。即時性は下がるが PoC では許容可能 |
 | 業務機能3（自動リマインド） | **可能** | WorkManager PeriodicWork（最短15分間隔） | Doze Mode制約により正確性 ±15分。サイレント時間帯は WorkManager の Constraints で制御 |
-| 業務機能5（90日自動削除） | **可能** | WorkManager PeriodicWork（日次）またはmanual admin | 削除タイミングにズレが生じるが PoC では許容可能 |
+| 業務機能5（90日自動削除） | **可能** | WorkManager PeriodicWork（日次）or manual admin | 削除タイミングにズレが生じるが PoC では許容可能 |
 
 **結論: PoC スコープでは Cloud Functions は回避可能。Spark 固定（ゼロ課金防衛）を最優先として採用する。**
 
@@ -171,7 +171,7 @@ WorkManager.getInstance(context).enqueueUniquePeriodicWork(
 )
 ```
 
-- PoCではマスターが起動するたびに実行されれば十分。manual admin削除でも許容。
+- PoCではマスターが起動するたびに実行されれば十分。manual deletionでも許容。
 
 ---
 

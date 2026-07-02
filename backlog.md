@@ -38,7 +38,7 @@ APK SHA256 (v1.0.1 unsigned): `7fae81730dff0a39a63b8ff0483fb988cf34fb070156ecf2a
 
 ## v1.0.2(Email/Password Auth実装・2026-07-02 完全完了)
 
-cmd_665 全フェーズ完遂。Firebase Console Email/Password Auth有効化(manual admin)完了済み。実機2台E2E全11ステップ通過。
+cmd_665 全フェーズ完遂。Firebase Console Email/Password Auth有効化(manual admin step)完了済み。実機2台E2E全11ステップ通過。
 
 | 項目 | 内容 | 状態 | 出典 |
 |------|------|------|------|
@@ -48,7 +48,7 @@ cmd_665 全フェーズ完遂。Firebase Console Email/Password Auth有効化(ma
 | signOut バグ修正 | AppNavigation Settings: appViewModel.signOut()呼出追加(従来はnavigateのみでFirebase auth未サインアウト) | ✅ 完了 | cmd_665 Phase3 |
 | 自動サインイン(SplashScreen) | SplashViewModel.tryAutoSignIn() → 既存email/password userは起動時自動ログイン+pairId復元→メイン画面直遷移 | ✅ 完了 | cmd_665 Phase3 |
 | SMV v3(papazon_dash_v3.smv) | AUTH_TYPE/PAIR_ID_PERSISTED追加 + CTL-8/CTL-8b/CTL-9追加。10性質全てNuSMV検証PASS | ✅ 完了 | cmd_665 Phase7 |
-| Firebase Console Email/Password Auth有効化 | Authentication > Sign-in method > Email/Password 有効化 (manual admin作業済み) | ✅ 完了 | cmd_665 Phase2 |
+| Firebase Console Email/Password Auth有効化 | Authentication > Sign-in method > Email/Password 有効化 (manual admin step completed) | ✅ 完了 | cmd_665 Phase2 |
 | 実機E2E(2台) | 端末1(office@dummy.test/okusan/MASTER)/端末2(home@dummy.test/tono/MEMBER) 全11ステップ通過 | ✅ 完了 | cmd_665 Phase6 |
 | Firestoreゴミデータcleanup | E2Eテスト後 users/pairs コレクション削除済み | ✅ 完了 | cmd_665 Phase6 |
 

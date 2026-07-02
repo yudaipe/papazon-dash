@@ -114,9 +114,9 @@
 | 項目 | 内容 |
 |------|------|
 | **リスク** | Firebase API キー・プロジェクト ID が Git リポジトリに混入 |
-| **現行対策** | papazon-dash/.gitignore および shogun 全体 .gitignore の両方で明示除外（cmd_667 二重遮断） |
+| **現行対策** | papazon-dash/.gitignore および project-level .gitignore の両方で明示除外（cmd_667 二重遮断） |
 | **残存リスク** | `git add -f` による強制追加は防げない。CI/CD パイプライン上での漏洩 |
-| **推奨 mitigation** | gitleaks を CI に組み込む（shogun 全体 .gitleaks.toml は既存）。Secrets Manager への移行 |
+| **推奨 mitigation** | gitleaks を CI に組み込む（project-level .gitleaks.toml は既存）。Secrets Manager への移行 |
 
 ### 6-2. Firebase API キーの性質
 
