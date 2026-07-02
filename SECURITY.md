@@ -143,8 +143,56 @@
 
 ---
 
+---
+
+## 設計上の判断（Security Trade-offs）
+
+本セクションでは、意図的にリスクを残した設計決定とその根拠を記録します。
+
+### T-1. pairs コレクションの list 権限を全認証済みユーザーに開放
+
+**判断**: `allow list: if request.auth != null` — 招待コード照合クエリ（`joinByCode whereEqualTo`）のために必要。
+
+**根拠**:
+- pairs コレクションへの `whereEqualTo("inviteCode", code)` クエリは、Firestore 上で `list` 権限なしには実行できない。
+- 代替案（招待コード照合を Cloud Functions に移行）はバックエンド複雑性が増大し、現フェーズの規模（家族2名利用）に対してオーバーエンジニアリングと判断。
+
+**影響範囲の評価**:
+- 露出するデータ: ショッピングリスト管理用のペアメタデータのみ（shopping items は非機密・財務/医療データ非含有）。
+- 攻撃者の前提条件: Firebase Authentication による有効なアカウント取得が必要（障壁あり）。
+- 招待コード総当たり: 6桁数字（約 90 万通り）・認証済みアカウントからのクエリが必要。
+
+**見送った対策**:
+- 招待コード照合の Cloud Functions 移行（将来候補）
+- inviteCode に有効期限フィールド追加（将来候補）
+- Cloud Functions 側でのレート制限実装（将来候補）
+
+**高機密データを扱う場合**: 上記対策を実装すること。現行アーキテクチャのまま機密性の高いデータを追加することは推奨しない。
+
+### T-2. member join 時の pairs update は差分検証付きで許可（v6.4）
+
+**判断**: member join は `joinByCode()` 実装が書き込む3フィールド（`member_uid` / `joined_at` / `partners`）のみ変更を許可。`master_uid` / `active` / `inviteCode` は不変条件として Firestore Rules レベルで強制。
+
+**根拠**:
+- v6.2 以前: `member_uid == null` の確認のみで、書き込み内容を検証していなかった（外部レビューで指摘）。
+- v6.3: `affectedKeys().hasOnly([...])` を導入したが、フィールドリストが実装（`FirebaseRepository.kt joinByCode()`）と乖離していた（`member_joined_at` ≠ 実際の `joined_at`、`partners` arrayUnion を未検証）。
+- v6.4（本バージョン）: 実装コードのフィールドリストと rules を突合し、`partners` の `hasAll` / `hasAny` / `size()+1` 多段検証を追加。
+
+**差分検証の多段構造（v6.4）**:
+1. `affectedKeys().hasOnly(['member_uid', 'joined_at', 'partners'])` — それ以外のフィールド変更を拒否
+2. `partners.hasAll(resource.data.partners)` — 既存 partners を削除できない
+3. `request.auth.uid in request.resource.data.partners` — 自分の UID が追加されていること
+4. `partners.size() == resource.data.partners.size() + 1` — 追加は自 UID の1件のみ
+
+**Firebase SDK 互換性注記**: Firestore REST API (`batchWrite` + `appendMissingElements`) 経由の `arrayUnion` は rules 評価時に `request.resource.data.partners` にトランスフォーム後の値が含まれないため DENIED となる。Android アプリが使用する Firebase SDK (gRPC プロトコル) 経由のみが正当な join 経路となる（REST 直叩きによる join は rules レベルで拒否される）。
+
+---
+
 ## 更新履歴
 
 | バージョン | 日付 | 変更内容 |
 |-----------|------|--------|
+| v1.3 | 2026-07-02 | T-2 Firebase SDK互換性注記追加: REST batchWrite経由joinはDENIED・SDKパスのみ正当 (cmd_673 gunshi INF-1) |
+| v1.2 | 2026-07-02 | T-2 v6.4対応: 実装フィールドとの乖離修正・partners多段検証追加 (cmd_673 P1) |
+| v1.1 | 2026-07-02 | Security Trade-offs セクション追加 (cmd_673): P0 rules差分検証・P1 設計判断文書化 |
 | v1.0 | 2026-07-02 | 初版作成 (cmd_667) |
