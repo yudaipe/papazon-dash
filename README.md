@@ -1,53 +1,78 @@
 # papazon-dash
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 カップル向けショッピングリスト共有 Android アプリ（SmartSE K01 コンペ優勝作品）。
 
 パートナーとリアルタイムで買い物リストを共有し、購入済みアイテムを FCM プッシュ通知で同期できます。
 
 ---
 
-## 機能
+## Features
 
-- **ペアリング**: 招待コードでパートナーと 1 対 1 接続
-- **買い物リスト共有**: アイテムの追加・削除をリアルタイム同期（Firestore）
-- **購入済みマーク**: タップで購入済み状態をトグル
-- **プッシュ通知**: パートナーがアイテムを追加した際に FCM 通知
-- **リマインダー**: 指定時刻に未完了アイテムを通知
-
-## 技術スタック
-
-- **Android**: Kotlin / Jetpack Compose / Hilt / Firebase SDK
-- **Backend**: Firebase Cloud Functions (TypeScript)
-- **Database**: Cloud Firestore
-- **Auth**: Firebase Anonymous Authentication
-- **Notifications**: Firebase Cloud Messaging (FCM)
+- **Pairing** — 6-digit invite code to connect with a partner (1-to-1)
+- **Shared shopping list** — real-time item sync via Firestore
+- **Done toggle** — tap to mark items as purchased (syncs instantly)
+- **Push notifications** — FCM alert when a partner adds or completes an item
+- **Reminder** — scheduled notification for pending items (Cloud Functions–backed)
+- **Persistent login** — Email/Password auth preserves UID and pair across reinstalls
 
 ---
 
-## セットアップ
+## Tech stack
 
-→ [SETUP.md](SETUP.md) を参照してください。
-
-各自の Firebase プロジェクトでビルドするためのすべての手順が記載されています。
-
----
-
-## 既知制約
-
-- **Anonymous Auth ベース**: 再インストール後に uid が変わるため再ペアリングが必要
-  （将来: Google Sign-In 実装予定）
-- **アイテム編集 UI 未実装**: 作成後の名前修正は削除・再作成で代替
-  （v1.1.0 予定）
-- **機能4（リマインダー送信）未実装**: Cloud Functions のリマインダー送信ロジックは実装済みだが Android 側 UI は未実装
-
-詳細 → [backlog.md](backlog.md)
+| Layer | Technology |
+|---|---|
+| Android | Kotlin / Jetpack Compose / Hilt |
+| Auth | Firebase Email/Password + Anonymous (fallback) |
+| Database | Cloud Firestore |
+| Backend | Firebase Cloud Functions (TypeScript) |
+| Notifications | Firebase Cloud Messaging (FCM) |
 
 ---
 
-## ライセンス
+## Fork & set up your own instance
 
-TBD — awaiting decision（[LICENSE](LICENSE) 参照）
+This project is MIT-licensed — feel free to fork, modify, and run your own instance.
 
-## コントリビュートポリシー
+→ **[SETUP.md](SETUP.md)** — complete step-by-step guide (Firebase project creation through first app launch)
 
-TBD
+Quick summary:
+1. Create a Firebase project and enable Anonymous + Email/Password auth
+2. Create a Firestore database and enable Cloud Messaging
+3. Upgrade to the Blaze plan (required for Cloud Functions)
+4. Download `google-services.json` → place at `android/app/google-services.json`
+5. Copy `.firebaserc.example` → `.firebaserc` and set your project ID
+6. `firebase deploy --only firestore:rules,firestore:indexes`
+7. `cd functions && npm install && npm run build && cd .. && firebase deploy --only functions`
+8. `cd android && ./gradlew assembleDebug`
+
+---
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [SETUP.md](SETUP.md) | Step-by-step setup for a new Firebase project |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Codebase layers, components, and data flows |
+| [SCHEMA.md](SCHEMA.md) | Firestore collections, fields, and security rules |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
+| [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
+| [backlog.md](backlog.md) | Known limitations and planned features |
+
+---
+
+## Known limitations
+
+- **Re-install behavior**: Email/Password auth preserves UID, so existing pair is restored on re-login.  
+  Anonymous-only accounts lose their pair on reinstall (legacy behavior, pre-v1.0.2).
+- **Item editing not implemented**: Rename an item by deleting and re-adding it. (Planned for v1.1.0)
+- **Reminder UI not implemented**: Cloud Functions–side reminder scheduling is ready, but the Android UI to set `reminderAt` is pending.
+
+Details → [backlog.md](backlog.md)
+
+---
+
+## License
+
+[MIT License](LICENSE) — Copyright (c) 2026 yudaipe
