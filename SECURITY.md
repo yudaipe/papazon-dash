@@ -192,7 +192,7 @@
 
 | バージョン | 日付 | 変更内容 |
 |-----------|------|--------|
-| v1.3 | 2026-07-02 | T-2 Firebase SDK互換性注記追加: REST batchWrite経由joinはDENIED・SDKパスのみ正当 (cmd_673 gunshi INF-1) |
+| v1.3 | 2026-07-02 | T-2 Firebase SDK互換性注記追加: REST batchWrite経由joinはDENIED・SDKパスのみ正当 (cmd_673 レビュー INF-1) |
 | v1.2 | 2026-07-02 | T-2 v6.4対応: 実装フィールドとの乖離修正・partners多段検証追加 (cmd_673 P1) |
 | v1.1 | 2026-07-02 | Security Trade-offs セクション追加 (cmd_673): P0 rules差分検証・P1 設計判断文書化 |
 | v1.0 | 2026-07-02 | 初版作成 (cmd_667) |

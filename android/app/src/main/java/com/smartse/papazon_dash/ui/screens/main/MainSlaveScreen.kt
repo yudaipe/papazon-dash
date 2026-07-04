@@ -16,6 +16,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.smartse.papazon_dash.data.model.Item
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,6 +27,8 @@ fun MainSlaveScreen(
 ) {
     val items by viewModel.items.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -37,6 +41,7 @@ fun MainSlaveScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -66,7 +71,20 @@ fun MainSlaveScreen(
                 items(items, key = { it.id }) { item ->
                     SlaveTaskItem(
                         item = item,
-                        onToggle = { viewModel.toggleItem(it.id) },
+                        onToggle = {
+                            val wasOpen = it.status == "open"
+                            viewModel.toggleItem(it.id)
+                            if (wasOpen) {
+                                scope.launch {
+                                    val snackbarJob = launch {
+                                        snackbarHostState.showSnackbar(EncouragementMessages.random())
+                                    }
+                                    delay(3125)
+                                    snackbarJob.cancel()
+                                    snackbarHostState.currentSnackbarData?.dismiss()
+                                }
+                            }
+                        },
                     )
                 }
                 item { Spacer(modifier = Modifier.height(80.dp)) }
